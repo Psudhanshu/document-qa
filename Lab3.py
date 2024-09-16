@@ -1,76 +1,70 @@
 import streamlit as st
 from openai import OpenAI
-import os
 
-# Show title and description
-st.title("📄 Document Summarizer")
-st.write(
-    "Upload a document below and ask a question about it – GPT will answer! "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys)."
-)
+# Title of the app
+st.title("Chatbot")
 
-# Ask user for their OpenAI API key via `st.text_input`.
-openai_api_key = st.secrets["open_api_key"]
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+# Initialize OpenAI client with the secret API key
+client = OpenAI(api_key=st.secrets["open_api_key"])
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+# Set the default model if not already present in session state
+if "openai_model" not in st.session_state:
+    st.session_state["openai_model"] = "gpt-3.5-turbo"
 
-    # Let the user upload a file via `st.file_uploader`.
-    uploaded_file = st.file_uploader("Upload a document (.txt or .md)", type=("txt", "md"))
+# Initialize the messages list if not already in session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    # Ask the user for a question via `st.text_area`.
-    question = st.text_area(
-        "Now ask a question about the document!",
-        placeholder="Can you give me a short summary?",
-        disabled=not uploaded_file,
-    )
+# Display all previous chat messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-    # Sidebar options for different types of summaries
-    st.sidebar.title("Summary Options")
-    summary_option = st.sidebar.radio(
-        "Select the type of summary you'd like:",
-        (
-            "Summarize in 100 words",
-            "Summarize in 2 paragraphs",
-            "Summarize in 5 bullet points"
-        )
-    )
+# Handle user input
+if prompt := st.chat_input("Ask a question..."):
+    # Add user message to session state and display it
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-    # Checkbox for using advanced GPT-4 model
-    use_advanced_model = st.sidebar.checkbox("Use Advanced Model (GPT-4)")
+    # Check if the user is responding to "DO YOU WANT MORE INFO?"
+    if len(st.session_state.messages) > 1 and st.session_state.messages[-2]["content"] == "DO YOU WANT MORE INFO?":
+        # If user says "yes", provide more information
+        if prompt.lower() == "yes":
+            more_info = "Here is more detailed information on your question..."
+            st.session_state.messages.append({"role": "assistant", "content": more_info})
+            with st.chat_message("assistant"):
+                st.markdown(more_info)
 
-    # Choose model based on checkbox
-    selected_model = "gpt-4" if use_advanced_model else "gpt-3.5-turbo"
+            # Re-ask the follow-up question
+            follow_up = "DO YOU WANT MORE INFO?"
+            st.session_state.messages.append({"role": "assistant", "content": follow_up})
+            with st.chat_message("assistant"):
+                st.markdown(follow_up)
 
-    if uploaded_file and question:
+        # If user says "no", ask for a new question
+        elif prompt.lower() == "no":
+            new_prompt = "What else can I help you with?"
+            st.session_state.messages.append({"role": "assistant", "content": new_prompt})
+            with st.chat_message("assistant"):
+                st.markdown(new_prompt)
 
-        # Process the uploaded file and question.
-        document = uploaded_file.read().decode()
+    else:
+        # If the user is asking an initial question, generate assistant's response
+        with st.chat_message("assistant"):
+            # Create the completion
+            stream = client.chat.completions.create(
+                model=st.session_state["openai_model"],
+                messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+                stream=True,
+            )
+            response = st.write_stream(stream)
 
-        # Adjust the prompt based on the selected summary option
-        if summary_option == "Summarize in 100 words":
-            summary_instruction = "Summarize the document in about 100 words."
-        elif summary_option == "Summarize in 2 paragraphs":
-            summary_instruction = "Summarize the document in 2 connecting paragraphs."
-        else:
-            summary_instruction = "Summarize the document in 5 bullet points."
+        # Append assistant response to the session
+        st.session_state.messages.append({"role": "assistant", "content": response})
 
-        messages = [
-            {
-                "role": "user",
-                "content": f"Here's a document: {document} \n\n---\n\n {summary_instruction}",
-            }
-        ]
-
-        # Generate an answer using the OpenAI API.
-        stream = client.chat.completions.create(
-            model=selected_model,
-            messages=messages,
-            stream=True,
-        )
-
-        # Stream the response to the app using `st.write_stream`.
-        st.write_stream(stream)
+        # Ask "DO YOU WANT MORE INFO?" after the response
+        follow_up = "DO YOU WANT MORE INFO?"
+        st.session_state.messages.append({"role": "assistant", "content": follow_up})
+        with st.chat_message("assistant"):
+            st.markdown(follow_up)
