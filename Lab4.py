@@ -1,70 +1,72 @@
 import streamlit as st
-from openai import OpenAI
+import chromadb
+import openai
+import os
+from PyPDF2 import PdfReader
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+import chromadb 
+import pysqlite3
+# import protobu 
+# Load OpenAI key from environment
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Title of the app
-st.title("Chatbot")
+st.title("Course Information Chatbot - Lab 4")
 
-# Initialize OpenAI client with the secret API key
-client = OpenAI(api_key=st.secrets["open_api_key"])
+# Function to read PDF files and return text
+def read_pdfs(pdf_files):
+    texts = []
+    for pdf_file in pdf_files:
+        reader = PdfReader(pdf_file)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text()
+        texts.append(text)
+    return texts
 
-# Set the default model if not already present in session state
-if "openai_model" not in st.session_state:
-    st.session_state["openai_model"] = "gpt-3.5-turbo"
+# Embedding text using OpenAI embeddings
+def embed_texts(texts):
+    embeddings = openai.Embedding.create(input=texts, model="text-embedding-ada-002")['data']
+    return [embedding['embedding'] for embedding in embeddings]
 
-# Initialize the messages list if not already in session state
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# Display all previous chat messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Handle user input
-if prompt := st.chat_input("Ask a question..."):
-    # Add user message to session state and display it
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # Check if the user is responding to "DO YOU WANT MORE INFO?"
-    if len(st.session_state.messages) > 1 and st.session_state.messages[-2]["content"] == "DO YOU WANT MORE INFO?":
-        # If user says "yes", provide more information
-        if prompt.lower() == "yes":
-            more_info = "Here is more detailed information on your question..."
-            st.session_state.messages.append({"role": "assistant", "content": more_info})
-            with st.chat_message("assistant"):
-                st.markdown(more_info)
-
-            # Re-ask the follow-up question
-            follow_up = "DO YOU WANT MORE INFO?"
-            st.session_state.messages.append({"role": "assistant", "content": follow_up})
-            with st.chat_message("assistant"):
-                st.markdown(follow_up)
-
-        # If user says "no", ask for a new question
-        elif prompt.lower() == "no":
-            new_prompt = "What else can I help you with?"
-            st.session_state.messages.append({"role": "assistant", "content": new_prompt})
-            with st.chat_message("assistant"):
-                st.markdown(new_prompt)
-
+# Creating and store ChromaDB collection
+def create_chromadb_collection():
+    if 'Lab4_vectorDB' not in st.session_state:
+        client = chromadb.Client()
+        collection = client.create_collection(name="Lab4Collection")
+        
+        # Read PDFs and generate embeddings
+        pdf_files = ["document1.pdf", "document2.pdf", "document3.pdf"]  # replace with actual PDF file paths
+        texts = read_pdfs(pdf_files)
+        embeddings = embed_texts(texts)
+        
+        # Add documents to ChromaDB
+        collection.add(
+            documents=texts,
+            metadatas=[{"filename": pdf_file} for pdf_file in pdf_files],
+            embeddings=embeddings
+        )
+        
+        st.session_state.Lab4_vectorDB = collection
+        st.write("ChromaDB collection created!")
     else:
-        # If the user is asking an initial question, generate assistant's response
-        with st.chat_message("assistant"):
-            # Create the completion
-            stream = client.chat.completions.create(
-                model=st.session_state["openai_model"],
-                messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
-                stream=True,
-            )
-            response = st.write_stream(stream)
+        st.write("ChromaDB already initialized.")
 
-        # Append assistant response to the session
-        st.session_state.messages.append({"role": "assistant", "content": response})
+# Initializing ChromaDB collection
+if st.button("Initialize ChromaDB"):
+    create_chromadb_collection()
 
-        # Ask "DO YOU WANT MORE INFO?" after the response
-        follow_up = "DO YOU WANT MORE INFO?"
-        st.session_state.messages.append({"role": "assistant", "content": follow_up})
-        with st.chat_message("assistant"):
-            st.markdown(follow_up)
+# Query ChromaDB
+def query_chromadb(query_text):
+    collection = st.session_state.Lab4_vectorDB
+    results = collection.query(query_texts=[query_text], n_results=3)
+    return results['metadatas']
+
+# Search query
+query = st.text_input("Enter search query (e.g., Generative AI, Data Science)")
+if query:
+    results = query_chromadb(query)
+    st.write("Top 3 matched documents:")
+    for result in results:
+        st.write(result['filename'])
